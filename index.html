@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="gu">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Reader AI - Expense Tracker</title>
+  <link rel="icon" type="image/png" href="icon.png">
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+  
+  <style>
+    :root { 
+      --primary: #1a2a6c; --accent: #00d2ff; --success: #00b09b; 
+      --danger: #ff416c; --dark: #2c3e50; --light: #f4f7f6;
+    }
+
+    /* Splash Screen Styling */
+    #splash-screen {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: #000; display: flex; align-items: center; justify-content: center;
+      z-index: 9999; transition: opacity 0.8s ease;
+    }
+    #splash-screen img { width: 100%; max-width: 600px; height: auto; border-radius: 10px; }
+
+    body { font-family: 'Segoe UI', Roboto, sans-serif; background: var(--light); margin: 0; padding: 15px; color: var(--dark); opacity: 0; transition: opacity 0.5s; }
+    .loaded body { opacity: 1; }
+
+    .box { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); margin-bottom: 20px; }
+    h2 { text-align: center; color: var(--primary); margin: 0 0 15px; font-size: 20px; text-transform: uppercase; }
+
+    /* Action Buttons */
+    .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+    .action-btn { padding: 15px; border-radius: 12px; border: none; font-weight: bold; cursor: pointer; color: white; transition: 0.3s; font-size: 14px; }
+    .btn-scan { background: linear-gradient(135deg, var(--primary), var(--accent)); }
+    .btn-manual { background: var(--dark); }
+    .action-btn:active { transform: scale(0.95); }
+
+    #status { font-weight: bold; color: var(--primary); text-align: center; margin: 15px 0; display: none; }
+    
+    /* Table & Summary */
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th, td { border-bottom: 1px solid #eee; padding: 12px 5px; text-align: left; }
+    input, select { padding: 10px; border: 1px solid #ddd; border-radius: 8px; width: 100%; font-size: 14px; }
+
+    .summary-item { margin-bottom: 15px; }
+    .progress-bg { background: #e9ecef; border-radius: 10px; height: 12px; width: 100%; overflow: hidden; margin-top: 5px; }
+    .progress-fill { height: 100%; transition: 0.6s ease; border-radius: 10px; }
+    
+    .btn-save { width: 100%; padding: 15px; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; margin-top: 10px; background: var(--success); color: white; font-size: 16px; box-shadow: 0 4px 10px rgba(0,176,155,0.2); }
+    .over-budget { color: var(--danger); font-size: 11px; font-weight: bold; display: block; margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+<div id="splash-screen">
+  <img src="banner.png" alt="Smart Reader AI Loading...">
+</div>
+
+<div class="box">
+  <h2>📊 Smart Reader AI</h2>
+  <div class="btn-group">
+    <button class="action-btn btn-scan" onclick="document.getElementById('billInput').click()">📸 Scan Bill (Guj/Eng)</button>
+    <button class="action-btn btn-manual" onclick="addManualEntry()">➕ Manual Entry</button>
+  </div>
+  <input type="file" id="billInput" accept="image/*" style="display:none" onchange="processBill(this)">
+  <div id="status">⏳ AI બિલ વાંચી રહ્યું છે...</div>
+</div>
+
+<div class="box" id="resultBox" style="display:none;">
+  <label style="font-weight: bold; color: var(--primary);">📋 વિગતો ચકાસો:</label>
+  <div style="overflow-x:auto">
+    <table id="billTable">
+      <thead><tr><th>વસ્તુ</th><th>કેટેગરી</th><th>કિંમત (₹)</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <button class="btn-save" onclick="saveData()">✅ આ ખર્ચ સેવ કરો</button>
+</div>
+
+<div class="box">
+  <label style="font-weight: bold; display: block; margin-bottom: 10px; color: var(--primary);">📈 આ મહિનાનો ખર્ચ રિપોર્ટ</label>
+  <div id="categorySummary"></div>
+</div>
+
+<script>
+let savedData = JSON.parse(localStorage.getItem("smartExpensesV5")) || [];
+let budgets = JSON.parse(localStorage.getItem("categoryBudgetsV5")) || {
+  "Grocery": 5000, "Clothes": 3000, "Medical": 1000, "Fuel": 2000, "Education": 2000, "Others": 2000
+};
+
+// Splash screen logic
+window.onload = function() {
+  setTimeout(() => {
+    const splash = document.getElementById('splash-screen');
+    splash.style.opacity = '0';
+    document.body.style.opacity = '1';
+    setTimeout(() => { splash.style.display = 'none'; }, 800);
+  }, 2500); // બેનર ૨.૫ સેકન્ડ માટે દેખાશે
+};
+
+// OCR Processing
+async function processBill(input) {
+  if (!input.files[0]) return;
+  document.getElementById('status').style.display = 'block';
+  document.getElementById('resultBox').style.display = 'none';
+
+  try {
+    const worker = await Tesseract.createWorker();
+    await worker.loadLanguage('eng+guj');
+    await worker.initialize('eng+guj');
+    const { data: { lines } } = await worker.recognize(input.files[0]);
+    
+    let tempItems = [];
+    lines.forEach(line => {
+      const text = line.text.trim();
+      const amountMatch = text.match(/(\d+[\.]\d{2})|(\s\d{2,6})$/);
+      if (amountMatch) {
+        const amount = parseFloat(amountMatch[0]);
+        const name = text.replace(amountMatch[0], "").trim();
+        if (name.length > 1) tempItems.push({ name, category: "Others", amount });
+      }
+    });
+    await worker.terminate();
+    document.getElementById('status').style.display = 'none';
+    if(tempItems.length > 0) showResultTable(tempItems);
+    else alert("વિગતો મળી નથી, કૃપા કરીને સ્પષ્ટ ફોટો પાડો અથવા મેન્યુઅલી એન્ટ્રી કરો.");
+  } catch (err) {
+    alert("ભૂલ આવી: " + err);
+    document.getElementById('status').style.display = 'none';
+  }
+}
+
+function showResultTable(items) {
+  window.currentItems = items;
+  document.getElementById('resultBox').style.display = 'block';
+  renderTable();
+}
+
+function renderTable() {
+  const tbody = document.querySelector('#billTable tbody');
+  tbody.innerHTML = window.currentItems.map((item, i) => `
+    <tr>
+      <td><input value="${item.name}" onchange="updateItem(${i}, 'name', this.value)"></td>
+      <td>
+        <select onchange="updateItem(${i}, 'category', this.value)">
+          ${Object.keys(budgets).map(c => `<option ${item.category==c?'selected':''}>${c}</option>`).join('')}
+        </select>
+      </td>
+      <td><input type="number" value="${item.amount}" onchange="updateItem(${i}, 'amount', this.value)"></td>
+      <td><button onclick="removeItem(${i})" style="border:none; background:none; color:red; cursor:pointer; font-size:18px;">✖</button></td>
+    </tr>`).join('');
+}
+
+function addManualEntry() {
+  if (!window.currentItems) window.currentItems = [];
+  window.currentItems.push({ name: "", category: "Others", amount: 0 });
+  document.getElementById('resultBox').style.display = 'block';
+  renderTable();
+}
+
+function updateItem(i, k, v) { window.currentItems[i][k] = k==='amount'?parseFloat(v):v; }
+function removeItem(i) { window.currentItems.splice(i, 1); renderTable(); }
+
+function saveData() {
+  const date = new Date().toISOString().split('T')[0];
+  let added = 0;
+  window.currentItems.forEach(item => { 
+    if(item.amount > 0) { savedData.push({ date, ...item }); added++; }
+  });
+  if(added === 0) return alert("કૃપા કરીને રકમ ઉમેરો!");
+  
+  localStorage.setItem("smartExpensesV5", JSON.stringify(savedData));
+  window.currentItems = [];
+  document.getElementById('resultBox').style.display = 'none';
+  renderSummary();
+  alert("ડેટા સેવ થઈ ગયો!");
+}
+
+function renderSummary() {
+  const summaryDiv = document.getElementById('categorySummary');
+  let spent = {};
+  savedData.forEach(d => spent[d.category] = (spent[d.category] || 0) + d.amount);
+
+  summaryDiv.innerHTML = Object.keys(budgets).map(cat => {
+    const s = spent[cat] || 0;
+    const b = budgets[cat];
+    const perc = Math.min((s / b) * 100, 100);
+    return `
+      <div class="summary-item">
+        <div style="display:flex; justify-content:space-between; font-size:14px; font-weight:500;">
+          <span>${cat}</span><span>₹${s.toFixed(2)} / ${b}</span>
+        </div>
+        <div class="progress-bg">
+          <div class="progress-fill" style="width:${perc}%; background:${s > b ? 'var(--danger)' : 'var(--success)'};"></div>
+        </div>
+        ${s > b ? `<span class="over-budget">⚠ બજેટ કરતા ₹${(s-b).toFixed(2)} વધુ ખર્ચ!</span>` : ''}
+      </div>`;
+  }).join('');
+}
+
+renderSummary();
+</script>
+</body>
+</html>
