@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="gu">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Reader AI Pro</title>
+  <link rel="manifest" href="manifest.json">
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+  <style>
+    :root { 
+      --bg: #030712; --card: rgba(17, 24, 39, 0.85);
+      --primary: #38bdf8; --accent: #818cf8; --success: #10b981;
+      --danger: #ef4444; --text: #f9fafb;
+    }
+
+    /* Professional Splash Screen */
+    #splash-screen {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: #000; display: flex; align-items: center; justify-content: center;
+      z-index: 9999; transition: transform 0.7s cubic-bezier(0.77, 0, 0.175, 1);
+    }
+    #splash-screen img { width: 100%; max-width: 500px; border-radius: 15px; box-shadow: 0 0 40px rgba(56,189,248,0.2); }
+
+    body { 
+      background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif;
+      margin: 0; padding: 15px; background-image: radial-gradient(circle at 50% 0%, #1e293b 0%, #030712 100%);
+      min-height: 100vh;
+    }
+
+    .glass-card { 
+      background: var(--card); backdrop-filter: blur(16px); 
+      border: 1px solid rgba(255,255,255,0.1); border-radius: 28px;
+      padding: 25px; margin-bottom: 20px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+    }
+
+    h2 { font-size: 20px; margin: 0 0 20px; text-align: center; letter-spacing: 0.5px;
+         background: linear-gradient(to right, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+    /* Action Buttons */
+    .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+    .neon-btn { 
+      padding: 20px 10px; border-radius: 20px; border: none; font-weight: 700; color: white;
+      cursor: pointer; transition: 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: flex; flex-direction: column; align-items: center; gap: 10px;
+    }
+    .btn-scan { background: linear-gradient(135deg, #0ea5e9, #2563eb); }
+    .btn-voice { background: linear-gradient(135deg, #8b5cf6, #d946ef); position: relative; overflow: hidden; }
+    
+    .listening-pulse { position: absolute; width: 100%; height: 100%; background: rgba(239,68,68,0.5); animation: pulse 1.2s infinite; display: none; }
+    @keyframes pulse { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.6); } }
+
+    /* Results UI */
+    .res-row { display: flex; justify-content: space-between; background: rgba(255,255,255,0.05); padding: 15px; border-radius: 15px; margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.05); }
+    .res-row input { background: transparent; border: none; color: white; font-size: 15px; width: 45%; outline: none; }
+
+    /* Analytics Styles */
+    .progress-container { margin-bottom: 20px; }
+    .label-group { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; color: #9ca3af; }
+    .progress-track { background: #1f2937; height: 8px; border-radius: 10px; overflow: hidden; }
+    .progress-bar { height: 100%; border-radius: 10px; transition: width 1s ease-in-out; }
+
+    #status-text { text-align: center; font-size: 13px; color: var(--primary); margin-top: 15px; min-height: 20px; font-weight: 500; }
+  </style>
+</head>
+<body>
+
+<div id="splash-screen">
+  <img src="1001047076.png" onerror="this.src='banner.png'">
+</div>
+
+<div class="glass-card">
+  <h2>🤖 Smart AI Assistant</h2>
+  <div class="btn-grid">
+    <button class="neon-btn btn-scan" onclick="document.getElementById('billInput').click()">
+      <span style="font-size:26px;">📸</span>
+      <span>Scan Bill</span>
+    </button>
+    <button id="voiceBtn" class="neon-btn btn-voice" onclick="startVoiceEntry()">
+      <div class="listening-pulse" id="pulse"></div>
+      <span style="font-size:26px;">🔘</span>
+      <span>AI Voice</span>
+    </button>
+  </div>
+  <input type="file" id="billInput" accept="image/*" style="display:none" onchange="aiScan(this)">
+  <div id="status-text">System Ready...</div>
+</div>
+
+<div id="resultCard" class="glass-card" style="display:none;">
+  <h2>🔍 Analysis Results</h2>
+  <div id="itemsContainer"></div>
+  <button onclick="commitData()" style="width:100%; padding:18px; border-radius:18px; border:none; background:var(--success); color:white; font-weight:800; margin-top:10px; cursor:pointer; box-shadow: 0 4px 15px rgba(16,185,129,0.3);">CONFIRM & SAVE</button>
+</div>
+
+<div class="glass-card">
+  <h2>📊 Live Budget Analytics</h2>
+  <div id="analyticsList"></div>
+</div>
+
+<script>
+let expenses = JSON.parse(localStorage.getItem("ai_expenses_pro")) || [];
+let limits = {"Grocery": 5000, "Clothes": 3000, "Medical": 1000, "Fuel": 2000, "Education": 2000, "Others": 2000};
+let recognition; 
+let isListening = false;
+let voiceTimeout;
+
+// 1. Splash Logic
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const s = document.getElementById('splash-screen');
+    s.style.transform = 'translateY(-100%)';
+    setTimeout(() => s.style.display = 'none', 700);
+  }, 2500);
+  updateUI();
+});
+
+// 2. Optimized Voice Assistant (5s Timeout + Toggle)
+function startVoiceEntry() {
+  const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Speech) return alert("બ્રાઉઝર વોઈસ સપોર્ટ કરતું નથી.");
+
+  // Toggle Logic: બીજી વાર ટેપ કરવાથી બંધ
+  if (isListening) {
+    stopVoiceEntry();
+    document.getElementById('status-text').innerText = "વોઈસ આસિસ્ટન્ટ બંધ કર્યો.";
+    return;
+  }
+
+  recognition = new Speech();
+  recognition.lang = 'gu-IN';
+  recognition.continuous = false;
+
+  recognition.onstart = () => {
+    isListening = true;
+    document.getElementById('pulse').style.display = 'block';
+    document.getElementById('voiceBtn').style.background = 'linear-gradient(135deg, #ef4444, #b91c1c)';
+    document.getElementById('status-text').innerText = "સાંભળી રહ્યું છે... (૫ સેકન્ડમાં બોલો)";
+    document.getElementById('status-text').style.color = "var(--primary)";
+
+    // 5-Second Timeout
+    voiceTimeout = setTimeout(() => {
+      if(isListening) {
+        stopVoiceEntry();
+        document.getElementById('status-text').innerText = "❌ સમય પૂરો: અવાજ સ્પષ્ટ નથી અથવા મળ્યો નથી.";
+        document.getElementById('status-text').style.color = "var(--danger)";
+      }
+    }, 5000);
+  };
+
+  recognition.onresult = (e) => {
+    clearTimeout(voiceTimeout);
+    const transcript = e.results[0][0].transcript;
+    document.getElementById('status-text').innerText = "Detected: " + transcript;
+    
+    const num = transcript.match(/\d+/);
+    if(num) {
+      const item = transcript.replace(num[0], "").trim() || "Voice entry";
+      showEditor([{ name: item, amount: parseFloat(num[0]) }]);
+    } else {
+      document.getElementById('status-text').innerText = "❌ ભૂલ: રકમ (Amount) સંભળાઈ નથી.";
+      document.getElementById('status-text').style.color = "var(--danger)";
+    }
+  };
+
+  recognition.onerror = () => {
+    clearTimeout(voiceTimeout);
+    stopVoiceEntry();
+    document.getElementById('status-text').innerText = "❌ માઈકમાં સમસ્યા છે.";
+    document.getElementById('status-text').style.color = "var(--danger)";
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    resetVoiceBtn();
+  };
+
+  recognition.start();
+}
+
+function stopVoiceEntry() {
+  if (recognition) {
+    recognition.stop();
+    clearTimeout(voiceTimeout);
+    isListening = false;
+    resetVoiceBtn();
+  }
+}
+
+function resetVoiceBtn() {
+  document.getElementById('pulse').style.display = 'none';
+  document.getElementById('voiceBtn').style.background = 'linear-gradient(135deg, #8b5cf6, #d946ef)';
+}
+
+// 3. Optimized OCR Scanning (30s Timeout)
+async function aiScan(input) {
+  if(!input.files[0]) return;
+  const status = document.getElementById('status-text');
+  status.innerText = "⏳ AI બિલ વાંચી રહ્યું છે...";
+  status.style.color = "var(--primary)";
+  
+  const scanTimeout = setTimeout(() => {
+    status.innerText = "❌ સમય પૂરો: બિલ વંચાયું નથી. ફરી પ્રયાસ કરો.";
+    status.style.color = "var(--danger)";
+    input.value = ""; 
+  }, 30000);
+
+  try {
+    const worker = await Tesseract.createWorker();
+    await worker.loadLanguage('eng+guj');
+    await worker.initialize('eng+guj');
+    const { data: { lines } } = await worker.recognize(input.files[0]);
+    
+    clearTimeout(scanTimeout);
+
+    let found = [];
+    lines.forEach(l => {
+      const m = l.text.match(/(\d+[\.]\d{2})|(\s\d{2,6})$/);
+      if(m) found.push({ name: l.text.replace(m[0], "").trim() || "Item", amount: parseFloat(m[0]) });
+    });
+
+    await worker.terminate();
+    if(found.length > 0) {
+      status.innerText = "✅ સ્કેનિંગ સફળ!";
+      status.style.color = "var(--success)";
+      showEditor(found);
+    } else {
+      throw new Error("માહિતી મળી નથી. ફોટો સ્પષ્ટ પાડો.");
+    }
+  } catch(e) {
+    clearTimeout(scanTimeout);
+    status.innerText = "❌ ભૂલ: " + e.message;
+    status.style.color = "var(--danger)";
+  }
+}
+
+function showEditor(items) {
+  window.tempData = items;
+  const container = document.getElementById('itemsContainer');
+  document.getElementById('resultCard').style.display = 'block';
+  container.innerHTML = items.map((it, i) => `
+    <div class="res-row">
+      <input type="text" value="${it.name}" onchange="window.tempData[${i}].name=this.value">
+      <input type="number" value="${it.amount}" onchange="window.tempData[${i}].amount=parseFloat(this.value)" style="text-align:right; color:var(--primary); font-weight:bold;">
+    </div>
+  `).join('');
+}
+
+function commitData() {
+  const d = new Date().toISOString().split('T')[0];
+  window.tempData.forEach(it => { if(it.amount > 0) expenses.push({date: d, category: "Others", ...it}); });
+  localStorage.setItem("ai_expenses_pro", JSON.stringify(expenses));
+  document.getElementById('resultCard').style.display = 'none';
+  updateUI();
+  document.getElementById('status-text').innerText = "ડેટા સેવ થઈ ગયો છે.";
+}
+
+function updateUI() {
+  const list = document.getElementById('analyticsList');
+  let totals = {};
+  expenses.forEach(e => totals[e.category] = (totals[e.category] || 0) + e.amount);
+
+  list.innerHTML = Object.keys(limits).map(cat => {
+    const s = totals[cat] || 0, l = limits[cat], p = Math.min((s/l)*100, 100);
+    const color = s > l ? 'var(--danger)' : (p > 80 ? '#fbbf24' : 'var(--success)');
+    return `
+      <div class="progress-container">
+        <div class="label-group"><span>${cat}</span><span>₹${s.toFixed(0)} / ${l}</span></div>
+        <div class="progress-track"><div class="progress-bar" style="width:${p}%; background:${color}"></div></div>
+      </div>`;
+  }).join('');
+}
+</script>
+</body>
+</html>
